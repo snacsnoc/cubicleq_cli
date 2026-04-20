@@ -8,6 +8,9 @@ on:
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
@@ -28,6 +31,12 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+
+      - name: Download and verify modules
+        run: |
+          set -euo pipefail
+          go mod download
+          go mod verify
 
       - name: Build archive and checksum
         run: |
