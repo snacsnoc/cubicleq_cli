@@ -325,7 +325,7 @@ func (o *Orchestrator) failRuntime(runtime state.Runtime, eventType, reason stri
 
 func (o *Orchestrator) blockRuntime(runtime state.Runtime, eventType, reason string) error {
 	if processAlive(runtime.PID) {
-		if err := killProcessTree(runtime.PID); err != nil {
+		if err := killUnixProcessTree(runtime.PID); err != nil {
 			return err
 		}
 	}
@@ -507,9 +507,9 @@ func Stop(store *state.Store, graceful bool) error {
 	}
 	for _, runtime := range runtimes {
 		if graceful {
-			_ = interruptProcessTree(runtime.PID, 8*time.Second)
+			_ = interruptUnixProcessTree(runtime.PID, 8*time.Second)
 		} else if processAlive(runtime.PID) {
-			_ = killProcessTree(runtime.PID)
+			_ = killUnixProcessTree(runtime.PID)
 		}
 		if graceful {
 			fmt.Printf("%s gracefully stopping %s\n", ts(), runtime.TaskID)
@@ -550,11 +550,11 @@ func processAlive(pid int) bool {
 	return process.Signal(syscall.Signal(0)) == nil
 }
 
-func interruptProcessTree(pid int, timeout time.Duration) error {
+func interruptUnixProcessTree(pid int, timeout time.Duration) error {
 	if pid <= 0 {
 		return nil
 	}
-	_ = signalProcessTree(pid, syscall.SIGINT)
+	_ = signalUnixProcessTree(pid, syscall.SIGINT)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if !processAlive(pid) {
@@ -562,7 +562,7 @@ func interruptProcessTree(pid int, timeout time.Duration) error {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	_ = signalProcessTree(pid, syscall.SIGTERM)
+	_ = signalUnixProcessTree(pid, syscall.SIGTERM)
 	deadline = time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if !processAlive(pid) {
@@ -570,20 +570,22 @@ func interruptProcessTree(pid int, timeout time.Duration) error {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	return killProcessTree(pid)
+	return killUnixProcessTree(pid)
 }
 
-func killProcessTree(pid int) error {
+func killUnixProcessTree(pid int) error {
 	if pid <= 0 {
 		return nil
 	}
-	if err := signalProcessTree(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+	if err := signalUnixProcessTree(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return err
 	}
 	return nil
 }
 
-func signalProcessTree(pid int, sig syscall.Signal) error {
+// Worker launch uses Setpgid and runtime stop/reconcile use Unix signals,
+// so Cubicleq's worker lifecycle is Unix-oriented today.
+func signalUnixProcessTree(pid int, sig syscall.Signal) error {
 	if pid <= 0 {
 		return nil
 	}

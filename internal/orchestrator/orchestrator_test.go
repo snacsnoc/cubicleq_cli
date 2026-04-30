@@ -12,6 +12,7 @@ import (
 
 	"github.com/snacsnoc/cubicleq_cli/internal/config"
 	"github.com/snacsnoc/cubicleq_cli/internal/state"
+	"github.com/snacsnoc/cubicleq_cli/internal/validation"
 )
 
 func TestReconcileLaunchingAliveButSilentBlocksTask(t *testing.T) {
@@ -27,7 +28,7 @@ func TestReconcileLaunchingAliveButSilentBlocksTask(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = killProcessTree(cmd.Process.Pid) })
+	t.Cleanup(func() { _ = killUnixProcessTree(cmd.Process.Pid) })
 
 	if err := store.UpsertRuntime(state.Runtime{
 		TaskID:        task.ID,
@@ -115,7 +116,7 @@ func TestReconcileRunningAliveWithStaleHeartbeatBlocksTask(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = killProcessTree(cmd.Process.Pid) })
+	t.Cleanup(func() { _ = killUnixProcessTree(cmd.Process.Pid) })
 
 	if err := store.UpsertRuntime(state.Runtime{
 		TaskID:        task.ID,
@@ -305,6 +306,81 @@ func TestFinalizeWithoutValidationCommandsSkipsAndMovesToReview(t *testing.T) {
 	}
 
 	assertLatestEvent(t, store, task.ID, "validation_skipped")
+}
+
+func TestFinalizeTimedOutValidationFailsTaskWithoutReviewArtifacts(t *testing.T) {
+	root, store := testStore(t)
+
+	worktree := t.TempDir()
+	task := testTask("t-finalize-timeout", state.TaskStateRunning)
+	task.WorktreePath = worktree
+	task.BranchName = "task/" + task.ID
+	task.ValidationCommands = []string{"printf before-out; printf before-err >&2; sleep 5"}
+	task.CompletionSummary = "done"
+	if err := store.AddTask(task); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertRuntime(state.Runtime{
+		TaskID:        task.ID,
+		BranchName:    task.BranchName,
+		WorktreePath:  task.WorktreePath,
+		SessionID:     task.ID + "-session",
+		Status:        "completed",
+		PID:           1,
+		LastHeartbeat: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	restoreValidationTimeout := validation.SetCommandTimeoutForTest(50 * time.Millisecond)
+	defer restoreValidationTimeout()
+
+	orch := New(root, "", config.Config{MaxParallelTasks: 2, WorktreeDir: filepath.Join(root, "worktrees")}, store)
+	if err := orch.finalize(task.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	gotTask, err := store.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotTask.State != state.TaskStateFailed {
+		t.Fatalf("expected task to fail after validation timeout, got %s", gotTask.State)
+	}
+	if gotTask.BlockedReason != "validation failed: printf before-out; printf before-err >&2; sleep 5" {
+		t.Fatalf("unexpected failure reason: %q", gotTask.BlockedReason)
+	}
+	assertNoActiveRuntime(t, store, task.ID)
+
+	runs, err := store.ListValidationRuns(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("expected one validation run, got %d", len(runs))
+	}
+	if runs[0].Status != "failed" || runs[0].ExitCode != 124 {
+		t.Fatalf("unexpected validation timeout run: %#v", runs[0])
+	}
+	if runs[0].Summary != "validation timed out after 50ms" {
+		t.Fatalf("unexpected validation timeout summary: %q", runs[0].Summary)
+	}
+
+	reviews, err := store.ListReviews()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reviews) != 0 {
+		t.Fatalf("expected no review rows after validation timeout, got %#v", reviews)
+	}
+
+	artifacts, err := store.ListTaskArtifacts(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(artifacts) != 0 {
+		t.Fatalf("expected no review artifacts after validation timeout, got %#v", artifacts)
+	}
 }
 
 func TestStopForcefulRequeuesRunningAndReadyTasks(t *testing.T) {

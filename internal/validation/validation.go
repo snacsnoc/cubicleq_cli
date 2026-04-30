@@ -2,6 +2,7 @@ package validation
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,24 @@ import (
 
 	"github.com/snacsnoc/cubicleq_cli/internal/state"
 )
+
+const (
+	DefaultCommandTimeout   = 5 * time.Minute
+	timeoutValidationStatus = "failed"
+	timeoutExitCode         = 124
+)
+
+var commandTimeout = DefaultCommandTimeout
+
+// SetCommandTimeoutForTest lets sibling package tests shorten the fixed timeout
+// without adding a config surface.
+func SetCommandTimeoutForTest(timeout time.Duration) func() {
+	previous := commandTimeout
+	commandTimeout = timeout
+	return func() {
+		commandTimeout = previous
+	}
+}
 
 func MissingConfigRun(root string, task state.Task) (state.ValidationRun, error) {
 	dir := state.ArtifactPath(root, task.ID, "validation")
@@ -44,12 +63,15 @@ func Run(root string, task state.Task) ([]state.ValidationRun, error) {
 	for i, command := range task.ValidationCommands {
 		stdoutPath := filepath.Join(dir, fmt.Sprintf("%03d.%s", i+1, "stdout.log"))
 		stderrPath := filepath.Join(dir, fmt.Sprintf("%03d.%s", i+1, "stderr.log"))
-		cmd := exec.Command("bash", "-lc", command)
+		ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+		cmd := exec.CommandContext(ctx, "bash", "-lc", command)
 		cmd.Dir = task.WorktreePath
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
 		err := cmd.Run()
+		timedOut := ctx.Err() == context.DeadlineExceeded
+		cancel()
 		if writeErr := writeValidationLogs(stdoutPath, stdout.Bytes(), stderrPath, stderr.Bytes()); writeErr != nil {
 			return nil, writeErr
 		}
@@ -60,7 +82,11 @@ func Run(root string, task state.Task) ([]state.ValidationRun, error) {
 			StderrPath: stderrPath,
 			CreatedAt:  time.Now().UTC(),
 		}
-		if err != nil {
+		if timedOut {
+			run.ExitCode = timeoutExitCode
+			run.Status = timeoutValidationStatus
+			run.Summary = fmt.Sprintf("validation timed out after %s", commandTimeout)
+		} else if err != nil {
 			run.ExitCode = exitCode(err)
 			run.Status = "failed"
 			run.Summary = strings.TrimSpace(stderr.String())

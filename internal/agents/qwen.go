@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -33,16 +32,14 @@ func New(cfg config.BackendConfig) Adapter {
 
 func (a Adapter) Launch(spec LaunchSpec) (*exec.Cmd, error) {
 	args := append([]string{}, a.cfg.Args...)
-	if ShouldUseQwenFlags(a.cfg.Command) {
-		promptBytes, err := os.ReadFile(spec.PromptPath)
-		if err != nil {
-			return nil, err
-		}
-		if err := writeQwenSettings(spec.Root, spec.Runtime.WorktreePath, spec.MCPURL); err != nil {
-			return nil, err
-		}
-		args = append(QwenHeadlessArgs(spec.Root, string(promptBytes), false), args...)
+	promptBytes, err := os.ReadFile(spec.PromptPath)
+	if err != nil {
+		return nil, err
 	}
+	if err := writeQwenSettings(spec.Root, spec.Runtime.WorktreePath, spec.MCPURL); err != nil {
+		return nil, err
+	}
+	args = append(QwenHeadlessArgs(spec.Root, string(promptBytes), false), args...)
 	cmd := exec.Command(a.cfg.Command, args...)
 	cmd.Dir = spec.Runtime.WorktreePath
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -83,11 +80,6 @@ func NewRuntime(task state.Task, branchName, worktreePath string) state.Runtime 
 		LastHeartbeat: now,
 		PID:           0,
 	}
-}
-
-func ShouldUseQwenFlags(command string) bool {
-	base := filepath.Base(command)
-	return strings.Contains(strings.ToLower(base), "qwen")
 }
 
 func QwenHeadlessArgs(root, prompt string, orchestrator bool) []string {

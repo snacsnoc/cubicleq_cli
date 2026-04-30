@@ -118,13 +118,11 @@ func runPlanner(root, binPath string, cfg config.Config, promptPath string) (Res
 
 func buildCommand(ctx context.Context, root, binPath string, cfg config.Config, promptPath string) (*exec.Cmd, *bytes.Buffer, *bytes.Buffer, func(), error) {
 	args := append([]string{}, cfg.Backend.Args...)
-	if agents.ShouldUseQwenFlags(cfg.Backend.Command) {
-		promptBytes, err := os.ReadFile(promptPath)
-		if err != nil {
-			return nil, nil, nil, nil, err
-		}
-		args = append(agents.QwenHeadlessArgs(root, string(promptBytes), true), args...)
+	promptBytes, err := os.ReadFile(promptPath)
+	if err != nil {
+		return nil, nil, nil, nil, err
 	}
+	args = append(agents.QwenHeadlessArgs(root, string(promptBytes), true), args...)
 	cmd := exec.CommandContext(ctx, cfg.Backend.Command, args...)
 	cmd.Dir = root
 
