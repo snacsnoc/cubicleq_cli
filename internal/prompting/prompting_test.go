@@ -33,6 +33,9 @@ func TestWriteOrchestratorBundleKeepsPromptFocusedOnStateAndActions(t *testing.T
 	if !strings.Contains(prompt, "leave acceptable tasks in review and return no_action") {
 		t.Fatalf("prompt missing no_action instruction")
 	}
+	if !strings.Contains(prompt, "merge_branch is an execution-time permission, not an action type.") {
+		t.Fatalf("prompt missing merge_branch execution-time note")
+	}
 	if strings.Contains(prompt, "ALLOWED COMMANDS:") {
 		t.Fatalf("prompt should not carry command-level orchestration scaffolding")
 	}
@@ -44,5 +47,26 @@ func TestWriteOrchestratorBundleKeepsPromptFocusedOnStateAndActions(t *testing.T
 	}
 	if !strings.Contains(prompt, `"policy": {`) {
 		t.Fatalf("prompt missing serialized orchestrator policy context")
+	}
+}
+
+func TestWriteOrchestratorBundleFiltersMergeBranchFromAllowedActionList(t *testing.T) {
+	root := t.TempDir()
+	policy := config.DefaultPolicy("main")
+
+	bundle, err := WriteOrchestratorBundle(root, policy, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(bundle.PromptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := string(raw)
+	if !strings.Contains(prompt, "Allowed actions: [retry_task resolve_blocker]") {
+		t.Fatalf("prompt should list only executable action types, got:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "Allowed actions: [retry_task resolve_blocker merge_branch]") {
+		t.Fatalf("prompt should not advertise merge_branch as an action type, got:\n%s", prompt)
 	}
 }

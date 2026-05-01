@@ -69,6 +69,18 @@ type OrchestratorContext struct {
 	Reviews  []state.Review  `json:"reviews"`
 }
 
+func promptAllowedActions(policy config.Policy) []string {
+	allowed := config.AllowedActions(policy)
+	out := make([]string, 0, len(allowed))
+	for _, action := range allowed {
+		switch action {
+		case "review_accept", "review_reject", "retry_task", "resolve_blocker", "create_followup_task":
+			out = append(out, action)
+		}
+	}
+	return out
+}
+
 func WriteOrchestratorBundle(root string, policy config.Policy, tasks []state.Task, runtimes []state.Runtime, blockers []state.Blocker, reviews []state.Review) (Bundle, error) {
 	dir := filepath.Join(config.RunsDir(root), "orchestrator")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -104,6 +116,7 @@ RULES:
 - Prefer no_action over speculative actions.
 - Use review_reject only for concrete defects or failed validation.
 - If review_accept is not allowed, leave acceptable tasks in review and return no_action.
+- merge_branch is an execution-time permission, not an action type. Only propose review_accept when merge permission is available.
 - Create follow-up tasks only when the existing review or blocker evidence clearly implies next work.
 - Every follow-up implementation task must include at least one concrete validation command.
 
@@ -130,7 +143,7 @@ OUTPUT:
 
 STATE CONTEXT JSON:
 %s
-`, policy.BaseBranch, config.AllowedActions(policy), string(contextData))
+`, policy.BaseBranch, promptAllowedActions(policy), string(contextData))
 	if err := os.WriteFile(promptPath, []byte(prompt), 0o644); err != nil {
 		return Bundle{}, err
 	}
