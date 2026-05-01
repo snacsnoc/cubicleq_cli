@@ -620,7 +620,7 @@ func TestResolveBlockerAllowsMissingValidationConfig(t *testing.T) {
 	}
 }
 
-func TestPromoteReadyTasksAutoResolvesMissingValidationBlocker(t *testing.T) {
+func TestPromoteReadyTasksLeavesMissingValidationBlockerUntouched(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, ".cubicleq"), 0o755); err != nil {
 		t.Fatal(err)
@@ -663,36 +663,84 @@ func TestPromoteReadyTasksAutoResolvesMissingValidationBlocker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.State != TaskStateReady {
-		t.Fatalf("expected blocked task to auto-resolve into ready, got %s", got.State)
-	}
-	if got.BlockedReason != "" {
-		t.Fatalf("expected blocked reason to clear, got %q", got.BlockedReason)
+	if got.State != TaskStateBlocked {
+		t.Fatalf("expected blocked task to remain blocked, got %s", got.State)
 	}
 
 	blockers, err := store.ListBlockers()
 	if err != nil {
 		t.Fatal(err)
 	}
+	foundBlocker := false
 	for _, blocker := range blockers {
 		if blocker.TaskID == task.ID {
-			t.Fatalf("expected blocker row for %s to be removed", task.ID)
+			foundBlocker = true
 		}
+	}
+	if !foundBlocker {
+		t.Fatalf("expected blocker row for %s to remain", task.ID)
 	}
 
 	events, err := store.ListEvents(task.ID, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := false
 	for _, event := range events {
 		if event.Type == "blocker_auto_resolved_validation_optional" {
-			found = true
-			break
+			t.Fatalf("did not expect auto-resolve event for %s, got %#v", task.ID, events)
 		}
 	}
-	if !found {
-		t.Fatalf("expected auto-resolve event for %s, got %#v", task.ID, events)
+}
+
+func TestMarkTaskReadyRequiresSatisfiedDependencies(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".cubicleq"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.InitSchema(); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC()
+	for _, task := range []Task{
+		{ID: "dep", Title: "dep", Priority: "medium", State: TaskStateTodo, RoleHint: "implementer", CreatedAt: now, UpdatedAt: now},
+		{ID: "child", Title: "child", Priority: "medium", State: TaskStateTodo, RoleHint: "implementer", Dependencies: []string{"dep"}, CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := store.AddTask(task); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	err = store.MarkTaskReady("child")
+	if err == nil || !strings.Contains(err.Error(), "unsatisfied dependencies") {
+		t.Fatalf("expected unsatisfied dependency error, got %v", err)
+	}
+
+	got, err := store.GetTask("child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != TaskStateTodo {
+		t.Fatalf("expected child to remain todo, got %s", got.State)
+	}
+
+	if err := store.SetTaskState("dep", TaskStateReview, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkTaskReady("child"); err != nil {
+		t.Fatalf("expected child to become ready, got %v", err)
+	}
+	got, err = store.GetTask("child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != TaskStateReady {
+		t.Fatalf("expected child to be ready, got %s", got.State)
 	}
 }
 

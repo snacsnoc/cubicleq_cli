@@ -295,7 +295,7 @@ func runTasks(rootOverride string, args []string) error {
 		if err != nil {
 			return err
 		}
-		return store.SetTaskState(taskID, state.TaskStateReady, "")
+		return store.MarkTaskReady(taskID)
 	default:
 		return errors.New("unknown tasks subcommand; run `cubicleq tasks --help` for available subcommands")
 	}

@@ -296,6 +296,24 @@ func (s *Store) SetTaskState(id, state, blockedReason string) error {
 	return err
 }
 
+func (s *Store) MarkTaskReady(id string) error {
+	task, err := s.GetTask(id)
+	if err != nil {
+		return err
+	}
+	if task.State != TaskStateTodo {
+		return fmt.Errorf("task %s is not in todo", id)
+	}
+	ready, err := s.dependenciesSatisfied(id)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return fmt.Errorf("task %s has unsatisfied dependencies", id)
+	}
+	return s.SetTaskState(id, TaskStateReady, "")
+}
+
 func (s *Store) SetTaskValidationCommands(id string, commands []string) error {
 	_, err := s.db.Exec(`UPDATE tasks SET validation_commands = ?, updated_at = ? WHERE id = ?`, toJSON(commands), time.Now().UTC().Format(time.RFC3339), id)
 	return err
@@ -350,41 +368,6 @@ func (s *Store) RetryTask(id string) error {
 }
 
 func (s *Store) PromoteReadyTasks() error {
-	autoRows, err := s.db.Query(`
-		SELECT id
-		FROM tasks
-		WHERE state = ?
-		  AND blocked_reason = ?`, TaskStateBlocked, "no validation configured")
-	if err != nil {
-		return err
-	}
-	var autoResolveIDs []string
-	for autoRows.Next() {
-		var id string
-		if err := autoRows.Scan(&id); err != nil {
-			autoRows.Close()
-			return err
-		}
-		autoResolveIDs = append(autoResolveIDs, id)
-	}
-	if err := autoRows.Err(); err != nil {
-		autoRows.Close()
-		return err
-	}
-	if err := autoRows.Close(); err != nil {
-		return err
-	}
-	for _, id := range autoResolveIDs {
-		if err := s.ResolveBlocker(id); err != nil {
-			return err
-		}
-		if err := s.RecordEvent(id, "blocker_auto_resolved_validation_optional", map[string]any{
-			"reason": "no validation configured",
-		}); err != nil {
-			return err
-		}
-	}
-
 	rows, err := s.db.Query(`SELECT id FROM tasks WHERE state = ?`, TaskStateTodo)
 	if err != nil {
 		return err

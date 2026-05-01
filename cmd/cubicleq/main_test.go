@@ -508,6 +508,44 @@ func TestRunTasksSetValidationParsesTaskIDBeforeFlags(t *testing.T) {
 	}
 }
 
+func TestRunTasksReadyRejectsUnsatisfiedDependencies(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".cubicleq"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.InitSchema(); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC()
+	for _, task := range []state.Task{
+		{ID: "dep", Title: "dep", Priority: "medium", State: state.TaskStateTodo, RoleHint: "implementer", CreatedAt: now, UpdatedAt: now},
+		{ID: "child", Title: "child", Priority: "medium", State: state.TaskStateTodo, RoleHint: "implementer", Dependencies: []string{"dep"}, CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := store.AddTask(task); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	err = runTasks(root, []string{"ready", "child"})
+	if err == nil || !strings.Contains(err.Error(), "unsatisfied dependencies") {
+		t.Fatalf("expected unsatisfied dependency error, got %v", err)
+	}
+
+	task, err := store.GetTask("child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.State != state.TaskStateTodo {
+		t.Fatalf("expected child to remain todo, got %s", task.State)
+	}
+}
+
 func TestRunCleanupPrintsSuccessMessage(t *testing.T) {
 	root := t.TempDir()
 	cfg, err := config.Default(root)
