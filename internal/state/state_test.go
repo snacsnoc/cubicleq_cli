@@ -1014,6 +1014,90 @@ func TestAcceptReviewClearsBlockerReviewAndRuntime(t *testing.T) {
 	}
 }
 
+func TestUpsertTaskArtifactRejectsMissingTaskAndEmptyPath(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".cubicleq"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.InitSchema(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.UpsertTaskArtifact("missing", "artifact", "/tmp/out.txt"); err == nil {
+		t.Fatal("expected missing task error")
+	}
+
+	now := time.Now().UTC()
+	task := Task{ID: "t-artifact", Title: "artifact", Priority: "medium", State: TaskStateTodo, RoleHint: "implementer", CreatedAt: now, UpdatedAt: now}
+	if err := store.AddTask(task); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertTaskArtifact(task.ID, "artifact", "   "); err == nil || !strings.Contains(err.Error(), "path is required") {
+		t.Fatalf("expected empty path error, got %v", err)
+	}
+}
+
+func TestRejectReviewRequiresReviewStateAndValidTarget(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".cubicleq"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.InitSchema(); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC()
+	task := Task{ID: "t-reject-guard", Title: "reject", Priority: "medium", State: TaskStateTodo, RoleHint: "implementer", CreatedAt: now, UpdatedAt: now}
+	if err := store.AddTask(task); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.RejectReview(task.ID, TaskStateTodo); err == nil || !strings.Contains(err.Error(), "task is not in review") {
+		t.Fatalf("expected review-state guard, got %v", err)
+	}
+	if err := store.FinalizeReview(task.ID, "/tmp/review.md", "/tmp/diff.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RejectReview(task.ID, TaskStateReady); err == nil || !strings.Contains(err.Error(), "invalid reject target state") {
+		t.Fatalf("expected invalid target guard, got %v", err)
+	}
+}
+
+func TestAcceptReviewRequiresReviewState(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".cubicleq"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.InitSchema(); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC()
+	task := Task{ID: "t-accept-guard", Title: "accept", Priority: "medium", State: TaskStateTodo, RoleHint: "implementer", CreatedAt: now, UpdatedAt: now}
+	if err := store.AddTask(task); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.AcceptReview(task.ID, false); err == nil || !strings.Contains(err.Error(), "task is not in review") {
+		t.Fatalf("expected review-state guard, got %v", err)
+	}
+}
+
 func TestLateClaimAfterReleaseTaskIsRejected(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, ".cubicleq"), 0o755); err != nil {

@@ -679,6 +679,17 @@ func (s *Store) MarkTaskRuntime(taskID, branchName, worktreePath string) error {
 }
 
 func (s *Store) UpsertTaskArtifact(taskID, kind, path string) error {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return errors.New("task_id is required")
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return errors.New("path is required")
+	}
+	if _, err := s.GetTask(taskID); err != nil {
+		return err
+	}
 	_, err := s.db.Exec(`INSERT INTO task_artifacts (task_id, kind, path) VALUES (?, ?, ?) ON CONFLICT(task_id, kind) DO UPDATE SET path = excluded.path`, taskID, kind, path)
 	return err
 }
@@ -875,6 +886,19 @@ func (s *Store) RejectReview(taskID, targetState string) error {
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC().Format(time.RFC3339)
+	if targetState != TaskStateTodo && targetState != TaskStateFailed {
+		return fmt.Errorf("invalid reject target state %q", targetState)
+	}
+	var taskState string
+	if err := tx.QueryRow(`SELECT state FROM tasks WHERE id = ?`, taskID).Scan(&taskState); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("task not found")
+		}
+		return err
+	}
+	if taskState != TaskStateReview {
+		return errors.New("task is not in review")
+	}
 	if _, err := tx.Exec(`DELETE FROM reviews WHERE task_id = ?`, taskID); err != nil {
 		return err
 	}
@@ -897,6 +921,16 @@ func (s *Store) AcceptReview(taskID string, clearWorktree bool) error {
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC().Format(time.RFC3339)
+	var taskState string
+	if err := tx.QueryRow(`SELECT state FROM tasks WHERE id = ?`, taskID).Scan(&taskState); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("task not found")
+		}
+		return err
+	}
+	if taskState != TaskStateReview {
+		return errors.New("task is not in review")
+	}
 	if _, err := tx.Exec(`DELETE FROM reviews WHERE task_id = ?`, taskID); err != nil {
 		return err
 	}
