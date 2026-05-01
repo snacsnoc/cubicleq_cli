@@ -29,8 +29,6 @@ Rules:
   "orchestrator": {
     "enabled": true,
     "allowed_actions": [
-      "review_accept",
-      "review_reject",
       "retry_task",
       "resolve_blocker",
       "merge_branch"
@@ -43,6 +41,7 @@ Rules:
 - `rejection_target_state` is required
 - `orchestrator.allowed_actions` is required and must be non-empty
 - `orchestrator.enabled` and `orchestrator.allowed_actions` are separate gates
+- `review_accept` and `review_reject` are **not** in the default policy. Add them explicitly to enable orchestrator driven review actions
 
 ## OPTIONS
 
