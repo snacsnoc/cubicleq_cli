@@ -18,6 +18,42 @@
 Rules:
 - `worktree_dir` must be repo-local at `<repo>/worktrees`
 - `backend.command` must resolve on `PATH` (`doctor` checks this)
+- `.cubicleq/config.json` is process-launch config only, it does not carry Qwen auth/provider/model selection
+
+### Repo Qwen config
+
+Use the repo `.qwen` directory for Qwen auth and model selection:
+
+- `.qwen/settings.json`: project-scoped Qwen provider, auth type, and model selection
+- `.qwen/.env`: preferred place for project-local Qwen API keys
+
+For OpenAI-compatible providers, use Qwen’s native project config path:
+
+```json
+{
+  "modelProviders": {
+    "openai": [
+      {
+        "id": "MiniMax-M2.7",
+        "envKey": "MINI_MAX_TOKEN_API_KEY",
+        "baseUrl": "https://api.minimax.io/v1"
+      }
+    ]
+  },
+  "security": {
+    "auth": {
+      "selectedType": "openai"
+    }
+  },
+  "model": {
+    "name": "MiniMax-M2.7"
+  }
+}
+```
+
+Runtime behavior:
+- workers derive worktree-local `.qwen/settings.json` from the repo file and copy `.qwen/.env` when present
+- `cubicleq orchestrate` derives runtime settings under `.cubicleq/runs/orchestrator/.qwen/settings.json`
 
 ### `.cubicleq/policy.json`
 
