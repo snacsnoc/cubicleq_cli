@@ -108,6 +108,7 @@ Reference: [docs/config.md](./docs/config.md)
 On `cubicleq init`, `.cubicleq/` is created in the project root.
 
 `.cubicleq/config.json` controls scheduler concurrency, worktree location, and worker backend command.
+`.qwen` stays the source of truth for Qwen auth/provider/model selection.
 
 `.cubicleq/config.json`:
 
@@ -123,6 +124,12 @@ Main settings:
 - `max_parallel_tasks`: maximum number of tasks `cubicleq run` launches concurrently.
 - `worktree_dir`: path for per-task git worktrees. Must be `<repo>/worktrees`.
 - `backend.command` and `backend.args`: executable and arguments used to start worker runs.
+
+qwen (`qwen-code`) runtime config:
+- Configure qwen the normal qwen way, once per repo if you want project-specific behavior. Cubicleq carries that runtime forward, but it does not become your auth system.
+- Use `<repo>/.qwen/settings.json` for project-scoped `modelProviders`, `security.auth.selectedType`, and `model.name`.
+- Use `<repo>/.qwen/.env` for project-local API keys when needed.
+- Workers derive runtime `.qwen/settings.json` from the repo config; `cubicleq orchestrate` derives runtime settings under `.cubicleq/runs/orchestrator/.qwen/settings.json` without mutating the durable repo file.
 
 
 ### Policy - what agents can and cannot do
