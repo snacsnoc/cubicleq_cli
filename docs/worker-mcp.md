@@ -1,30 +1,45 @@
-# worker-mcp - embedded MCP reporting tools
+# worker-mcp - worker progress reporting
+
+## SYNOPSIS
+
+Workers launched by `cubicleq run` report progress back to cubicleq through a local MCP server.
+
+You, as the squishy human, usually do not call these tools directly.
+You see their effects through:
+
+```bash
+cubicleq status
+cubicleq logs <task-id>
+cubicleq blockers list
+cubicleq review list
+```
 
 ## DESCRIPTION
 
-Workers report through the embedded MCP server.
-Tools mutate durable state.
+cubicleq starts a local MCP server for worker reporting while `cubicleq run` is active.
+Workers use it to move tasks forward, surface blockers, and attach evidence.
 
-## TOOL REFERENCE
+Worker reporting actions:
 
-| Tool | Effect |
-|---|---|
-| `claim_task` | task -> `running`, runtime -> `running`, event written |
-| `heartbeat` | runtime heartbeat updated, event written |
-| `block_task` | blocker persisted, task -> `blocked`, runtime deleted, event written |
-| `complete_task` | completion metadata stored, runtime -> `completed`, event written |
-| `attach_artifact` | artifact row upserted, event written |
-| `release_task` | blocker persisted, task -> `blocked`, runtime deleted, event written |
+- `claim_task`: worker starts the task and moves it into active execution
+- `heartbeat`: worker reports that the task is still in progress
+- `block_task`: worker stops and records a blocker reason
+- `complete_task`: worker reports completion and hands the task to finalization
+- `attach_artifact`: worker attaches a file path to the task record
+- `release_task`: worker gives up the task without marking it complete
 
-## GUARDS
+User-facing outcomes:
 
-- `claim_task` fails unless task is `ready` and runtime is `launching`
-- `heartbeat` fails unless task and runtime are actively running
-- `block_task` fails unless task is `running`
-- `complete_task` fails unless task is `running`
-- `attach_artifact` fails if `task_id` is missing or unknown
-- `release_task` fails when runtime row is missing
+- if a worker claims a task, `status` shows it as running
+- if a worker sends heartbeats, Cubicleq can tell the runtime is still alive
+- if a worker blocks or releases a task, the task moves to `blocked`
+- if a worker completes a task, Cubicleq runs validation and may move the task to `review`
+- if a worker attaches artifacts, they appear in `logs` and related task output
 
-## WARNINGS
+These tools are part of the worker reporting contract and should be treated as stable.
 
-Tool names are part of the runtime contract. Keep names stable unless worker prompts, tests, and reporting server are updated together.
+## NOTES
+
+- This MCP server is local-only and is meant for same-host execution.
+- Do not expose it outside the machine running `cubicleq run`.
+- If worker reporting stops, inspect `cubicleq logs <task-id>` first.
