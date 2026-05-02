@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -36,7 +35,11 @@ func (a Adapter) Launch(spec LaunchSpec) (*exec.Cmd, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := writeQwenSettings(spec.Root, spec.Runtime.WorktreePath, spec.MCPURL); err != nil {
+	if _, err := PrepareProjectQwenRuntime(spec.Root, spec.Runtime.WorktreePath, RuntimeQwenOptions{
+		InjectMCP: true,
+		MCPURL:    spec.MCPURL,
+		CopyEnv:   true,
+	}); err != nil {
 		return nil, err
 	}
 	args = append(QwenHeadlessArgs(spec.Root, string(promptBytes), false), args...)
@@ -105,26 +108,52 @@ func QwenSystemPrompt(orchestrator bool) string {
 	return "Do not output conversational text, reasoning, or preamble. Work directly, report through Cubicleq tools, and stop on explicit stop conditions."
 }
 
-func writeQwenSettings(projectRoot, worktreePath, mcpURL string) error {
-	dir := filepath.Join(worktreePath, ".qwen")
+type RuntimeQwenOptions struct {
+	InjectMCP bool
+	MCPURL    string
+	CopyEnv   bool
+}
+
+func PrepareProjectQwenRuntime(projectRoot, runtimeRoot string, opts RuntimeQwenOptions) (string, error) {
+	dir := config.QwenDir(runtimeRoot)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+		return "", err
 	}
 	settings, err := loadBaseQwenSettings(projectRoot)
 	if err != nil {
-		return err
+		return "", err
 	}
 	ensureDefaultQwenSettings(settings)
-	mergeCubicleMCP(settings, mcpURL)
+	if opts.InjectMCP {
+		mergeCubicleMCP(settings, opts.MCPURL)
+	}
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
-		return err
+		return "", err
 	}
-	return os.WriteFile(filepath.Join(dir, "settings.json"), data, 0o644)
+	settingsPath := config.QwenSettingsPath(runtimeRoot)
+	if err := os.WriteFile(settingsPath, data, 0o644); err != nil {
+		return "", err
+	}
+	if opts.CopyEnv {
+		if err := syncProjectQwenEnv(projectRoot, runtimeRoot); err != nil {
+			return "", err
+		}
+	}
+	return settingsPath, nil
+}
+
+func writeQwenSettings(projectRoot, worktreePath, mcpURL string) error {
+	_, err := PrepareProjectQwenRuntime(projectRoot, worktreePath, RuntimeQwenOptions{
+		InjectMCP: true,
+		MCPURL:    mcpURL,
+		CopyEnv:   true,
+	})
+	return err
 }
 
 func loadBaseQwenSettings(projectRoot string) (map[string]any, error) {
-	path := filepath.Join(projectRoot, ".qwen", "settings.json")
+	path := config.QwenSettingsPath(projectRoot)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -140,6 +169,22 @@ func loadBaseQwenSettings(projectRoot string) (map[string]any, error) {
 		settings = map[string]any{}
 	}
 	return settings, nil
+}
+
+func syncProjectQwenEnv(projectRoot, runtimeRoot string) error {
+	sourcePath := config.QwenEnvPath(projectRoot)
+	targetPath := config.QwenEnvPath(runtimeRoot)
+	data, err := os.ReadFile(sourcePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			if removeErr := os.Remove(targetPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				return removeErr
+			}
+			return nil
+		}
+		return err
+	}
+	return os.WriteFile(targetPath, data, 0o600)
 }
 
 func ensureDefaultQwenSettings(settings map[string]any) {

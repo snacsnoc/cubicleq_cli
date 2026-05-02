@@ -16,13 +16,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/snacsnoc/cubicleq_cli/internal/actions"
-	"github.com/snacsnoc/cubicleq_cli/internal/config"
-	"github.com/snacsnoc/cubicleq_cli/internal/orchestrator"
-	"github.com/snacsnoc/cubicleq_cli/internal/orchestratoragent"
-	"github.com/snacsnoc/cubicleq_cli/internal/reporting"
-	"github.com/snacsnoc/cubicleq_cli/internal/state"
-	"github.com/snacsnoc/cubicleq_cli/internal/worktree"
+	"github.com/easto/cubicle-dev-flow-aut/internal/actions"
+	"github.com/easto/cubicle-dev-flow-aut/internal/config"
+	"github.com/easto/cubicle-dev-flow-aut/internal/orchestrator"
+	"github.com/easto/cubicle-dev-flow-aut/internal/orchestratoragent"
+	"github.com/easto/cubicle-dev-flow-aut/internal/reporting"
+	"github.com/easto/cubicle-dev-flow-aut/internal/state"
+	"github.com/easto/cubicle-dev-flow-aut/internal/worktree"
 )
 
 const (
@@ -85,25 +85,35 @@ func run(args []string) error {
 }
 
 func usage() error {
-	fmt.Println(`Usage:
-  cubicleq [--root /abs/path/to/repo] <command> [args]
+	fmt.Println(`cubicle
+
+Local CLI orchestrator for coding agents with explicit git worktrees, durable task state, and review-oriented outputs.
+
+Usage:
+  cubicle [--root /abs/path/to/repo] <command> [args]
 
 Core workflow:
-  cubicleq init
-  cubicleq tasks add --title "..."
-  cubicleq run
-  cubicleq status
+  cubicle init [--bootstrap-git]
+  cubicle tasks add --title "task title" [--description "..."] [--priority high] [--validate "npm test"] [--depends-on "t-1,t-2"]
+  cubicle tasks set-deps <task-id> --depends-on "t-1,t-2"
+  cubicle run
+  cubicle orchestrate
+  cubicle stop
+  cubicle status
+  cubicle logs <task-id>
+  cubicle blockers list
+  cubicle review list
 
 Commands:
-  init               Initialize .cubicleq/ state in the target repo
+  init               Initialize .cubicle/ state in the target repo
   tasks              Add, list, show, and update tasks
   blockers           Inspect or resolve blocked tasks
   review             Inspect review-ready tasks
   workers            Show worker runtime records
   sessions           Alias for workers
   status             Show a compact task/runtime/blocker/review summary
-  run                Run the worker scheduler in the foreground (task execution)
-  orchestrate        Run the review orchestrator in the foreground (review actions)
+  run                Run the orchestrator in the foreground
+  orchestrate        Run the dedicated orchestrator agent in the foreground
   stop               Gracefully stop active workers and requeue unfinished tasks
   retry              Reset a task for another attempt
   cleanup            Remove runtime artifacts and worktrees
@@ -112,9 +122,13 @@ Commands:
   mcp-call           Low-level MCP test command
   help               Show this help
 
-Notes:
-  run stays in the foreground. Use Ctrl+C to stop and requeue.
-  --root defaults to the current directory.`)
+  Notes:
+  --root defaults to the current directory when omitted.
+  run stays in the foreground. Use another terminal with 'cubicle status' to inspect progress.
+  task-targeting commands accept unique task-id prefixes.
+  tasks set-deps replaces the entire dependency list; use --depends-on "" to clear dependencies.
+  Ctrl+C stops the orchestrator, kills active workers, and requeues unfinished tasks.
+  stop sends a graceful interrupt to active workers before requeueing them.`)
 	return nil
 }
 
@@ -159,16 +173,13 @@ func runInit(rootOverride string, args []string) error {
 	if err := store.InitSchema(); err != nil {
 		return err
 	}
-	fmt.Println("initialized cubicleq runtime in", filepath.Join(root, ".cubicleq"))
+	fmt.Println("initialized cubicle runtime in", filepath.Join(root, ".cubicle"))
 	return nil
 }
 
 func runTasks(rootOverride string, args []string) error {
 	if len(args) == 0 {
-		return errors.New("tasks subcommand required; run `cubicleq tasks --help` for available subcommands")
-	}
-	if args[0] == "--help" || args[0] == "-h" {
-		return tasksUsage()
+		return errors.New("tasks subcommand required")
 	}
 	_, store, err := openStore(rootOverride)
 	if err != nil {
@@ -186,6 +197,9 @@ func runTasks(rootOverride string, args []string) error {
 		validate := fs.String("validate", "", "comma-separated validation commands")
 		deps := fs.String("depends-on", "", "comma-separated dependency ids")
 		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if err := authorizeAction(rootOverride, "create_followup_task"); err != nil {
 			return err
 		}
 		if strings.TrimSpace(*title) == "" {
@@ -235,16 +249,17 @@ func runTasks(rootOverride string, args []string) error {
 		}
 		return printJSON(task)
 	case "set-validation":
-		if len(args) < 2 {
-			return errors.New("tasks set-validation <task-id> --validate \"cmd1,cmd2\"")
-		}
-		taskID, err := resolveTaskIDArg(store, args[1])
-		if err != nil {
-			return err
-		}
 		fs := flag.NewFlagSet("tasks set-validation", flag.ContinueOnError)
 		validate := fs.String("validate", "", "comma-separated validation commands")
-		if err := fs.Parse(args[2:]); err != nil {
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		rest := fs.Args()
+		if len(rest) < 1 {
+			return errors.New("tasks set-validation <task-id> --validate \"cmd1,cmd2\"")
+		}
+		taskID, err := resolveTaskIDArg(store, rest[0])
+		if err != nil {
 			return err
 		}
 		commands := splitCSV(*validate)
@@ -297,7 +312,7 @@ func runTasks(rootOverride string, args []string) error {
 		}
 		return store.MarkTaskReady(taskID)
 	default:
-		return errors.New("unknown tasks subcommand; run `cubicleq tasks --help` for available subcommands")
+		return errors.New("unknown tasks subcommand")
 	}
 }
 
@@ -330,6 +345,9 @@ func runBlockers(rootOverride string, args []string) error {
 		if err != nil {
 			return err
 		}
+		if err := authorizeAction(rootOverride, "resolve_blocker"); err != nil {
+			return err
+		}
 		policy, err := config.LoadPolicy(root)
 		if err != nil {
 			return err
@@ -347,10 +365,6 @@ func runBlockers(rootOverride string, args []string) error {
 
 func runReview(rootOverride string, args []string) error {
 	if len(args) == 0 {
-		fmt.Print(reviewUsageText())
-		return nil
-	}
-	if args[0] == "--help" || args[0] == "-h" {
 		fmt.Print(reviewUsageText())
 		return nil
 	}
@@ -391,6 +405,9 @@ func runReview(rootOverride string, args []string) error {
 		if err != nil {
 			return err
 		}
+		if err := authorizeAction(rootOverride, "review_accept"); err != nil {
+			return err
+		}
 		policy, err := config.LoadPolicy(root)
 		if err != nil {
 			return err
@@ -412,10 +429,13 @@ func runReview(rootOverride string, args []string) error {
 			taskID = fs.Arg(0)
 		}
 		if taskID == "" {
-			return errors.New("review reject <task-id> [--note \"...\"]")
+			return errors.New("review reject <task-id> --note \"...\"")
 		}
 		taskID, err = resolveTaskIDArg(store, taskID)
 		if err != nil {
+			return err
+		}
+		if err := authorizeAction(rootOverride, "review_reject"); err != nil {
 			return err
 		}
 		policy, err := config.LoadPolicy(root)
@@ -582,7 +602,7 @@ func runStop(rootOverride string) error {
 		return err
 	}
 	defer store.Close()
-	runtimes, err := store.ListLiveRuntimes()
+	runtimes, err := store.ListActiveRuntimes()
 	if err != nil {
 		return err
 	}
@@ -594,12 +614,11 @@ func runStop(rootOverride string) error {
 }
 
 func runRetry(rootOverride string, args []string) error {
-	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
-		fmt.Print(retryUsageText())
-		return nil
-	}
 	if len(args) != 1 {
-		return errors.New(strings.TrimSpace(retryUsageText()))
+		return errors.New("retry <task-id>")
+	}
+	if err := authorizeAction(rootOverride, "retry_task"); err != nil {
+		return err
 	}
 	root, store, err := openStore(rootOverride)
 	if err != nil {
@@ -628,11 +647,7 @@ func runCleanup(rootOverride string) error {
 		return err
 	}
 	defer store.Close()
-	if err := orchestrator.Cleanup(root, store); err != nil {
-		return err
-	}
-	fmt.Println("cleanup complete")
-	return nil
+	return orchestrator.Cleanup(root, store)
 }
 
 func runDoctor(rootOverride string) error {
@@ -653,24 +668,18 @@ func runDoctor(rootOverride string) error {
 	fmt.Println("\nGit")
 	fmt.Println("  ok")
 	fmt.Println("\nBackend")
-	fmt.Printf("  command=%s\n", cfg.Backend.Command)
+	fmt.Printf("  type=%s command=%s\n", cfg.Backend.Type, cfg.Backend.Command)
 	policy, err := config.LoadPolicy(root)
 	if err == nil {
 		fmt.Println("\nPolicy")
-		fmt.Printf("  base=%s allowed=%v\n", policy.BaseBranch, config.AllowedActions(policy))
+		fmt.Printf("  base=%s mode=%s allowed=%v\n", policy.BaseBranch, policy.Orchestrator.Mode, config.AllowedActions(policy))
 	}
 	fmt.Println("\nQwen Settings")
-	settingsPath := config.QwenSettingsPath(root)
+	settingsPath := filepath.Join(root, ".qwen", "settings.json")
 	if _, err := os.Stat(settingsPath); err == nil {
-		fmt.Printf("  project settings: found %s\n", settingsPath)
+		fmt.Printf("  found %s\n", settingsPath)
 	} else {
-		fmt.Printf("  project settings: missing %s\n", settingsPath)
-	}
-	envPath := config.QwenEnvPath(root)
-	if _, err := os.Stat(envPath); err == nil {
-		fmt.Printf("  project env:      found %s\n", envPath)
-	} else {
-		fmt.Printf("  project env:      missing %s\n", envPath)
+		fmt.Printf("  missing %s\n", settingsPath)
 	}
 	fmt.Println("\nRuntimes")
 	if len(runtimes) == 0 {
@@ -687,12 +696,6 @@ func runDoctor(rootOverride string) error {
 			health = "stale-heartbeat"
 		}
 		fmt.Printf("  %s  pid=%d  state=%s  last=%s  %s\n", runtime.TaskID, runtime.PID, renderRuntimeState(runtime), describeAge(runtime.LastHeartbeat), health)
-		worktreeSettingsPath := config.QwenSettingsPath(runtime.WorktreePath)
-		if _, err := os.Stat(worktreeSettingsPath); err == nil {
-			fmt.Printf("    worktree qwen settings: found %s\n", worktreeSettingsPath)
-		} else {
-			fmt.Printf("    worktree qwen settings: missing %s\n", worktreeSettingsPath)
-		}
 	}
 	return nil
 }
@@ -873,6 +876,9 @@ func workingRoot(rootOverride string) (string, error) {
 	if root := strings.TrimSpace(rootOverride); root != "" {
 		return filepath.Abs(root)
 	}
+	if root := strings.TrimSpace(os.Getenv("CUBICLE_ROOT")); root != "" {
+		return filepath.Abs(root)
+	}
 	return os.Getwd()
 }
 
@@ -895,6 +901,27 @@ func parseGlobalArgs(args []string) (string, []string, error) {
 		}
 	}
 	return root, rest, nil
+}
+
+func authorizeAction(rootOverride, action string) error {
+	if os.Getenv("CUBICLE_ACTOR") != "orchestrator-agent" {
+		return nil
+	}
+	root, err := workingRoot(rootOverride)
+	if err != nil {
+		return err
+	}
+	policy, err := config.LoadPolicy(root)
+	if err != nil {
+		return err
+	}
+	if !config.AllowsAction(policy, action) {
+		return fmt.Errorf("policy denied action %q", action)
+	}
+	if action == "review_accept" && !config.AllowsAction(policy, "merge_branch") {
+		return fmt.Errorf("policy denied action %q", "merge_branch")
+	}
+	return nil
 }
 
 func detectBaseBranch(root string) (string, error) {
@@ -988,36 +1015,17 @@ func splitLeadingTaskID(args []string) (string, []string) {
 
 func reviewUsageText() string {
 	return `review commands:
-  cubicleq review list
-  cubicleq review show <task-id>
-  cubicleq review accept <task-id>
-  cubicleq review reject <task-id> [--note "..."]
+  cubicle review list
+  cubicle review show <task-id>
+  cubicle review accept <task-id>
+  cubicle review reject <task-id> --note "..."
 `
-}
-
-func retryUsageText() string {
-	return `retry usage:
-  cubicleq retry <task-id>
-`
-}
-
-func tasksUsage() error {
-	fmt.Print(`tasks commands:
-  cubicleq tasks add --title "..." [--description "..."] [--validate "cmd1,cmd2"] [--depends-on "id1,id2"]
-  cubicleq tasks list
-  cubicleq tasks show <task-id>
-  cubicleq tasks set-validation <task-id> --validate "cmd1,cmd2"
-  cubicleq tasks set-deps <task-id> --depends-on "id1,id2"
-  cubicleq tasks ready <task-id>
-  cubicleq tasks --help
-`)
-	return nil
 }
 
 func blockersUsageText() string {
 	return `blockers commands:
-  cubicleq blockers list
-  cubicleq blockers resolve <task-id>
+  cubicle blockers list
+  cubicle blockers resolve <task-id>
 `
 }
 
@@ -1080,19 +1088,37 @@ func buildStatusRecommendations(tasks []state.Task, blockers []state.Blocker, re
 			Reason: "no tasks exist",
 			Commands: []recommendedCommand{{
 				Label: "next",
-				Value: `cubicleq tasks add --title "..."`,
+				Value: `cubicle tasks add --title "..." --validate "..."`,
 			}},
 		}}
 	}
 
+	taskByID := make(map[string]state.Task, len(tasks))
+	for _, task := range tasks {
+		taskByID[task.ID] = task
+	}
+
 	recommendations := make([]statusRecommendation, 0, len(blockers)+len(reviews)+1)
 	for _, blocker := range blockers {
+		task := taskByID[blocker.TaskID]
+		if blocker.Reason == "no validation configured" && len(task.ValidationCommands) == 0 {
+			recommendations = append(recommendations, statusRecommendation{
+				Kind:   "blocked",
+				TaskID: blocker.TaskID,
+				Reason: blocker.Reason,
+				Commands: []recommendedCommand{
+					{Label: "next", Value: fmt.Sprintf(`cubicle tasks set-validation %s --validate "..."`, blocker.TaskID)},
+					{Label: "then", Value: fmt.Sprintf("cubicle blockers resolve %s", blocker.TaskID)},
+				},
+			})
+			continue
+		}
 		recommendations = append(recommendations, statusRecommendation{
 			Kind:   "blocked",
 			TaskID: blocker.TaskID,
 			Reason: blocker.Reason,
 			Commands: []recommendedCommand{
-				{Label: "inspect", Value: fmt.Sprintf("cubicleq logs %s", blocker.TaskID)},
+				{Label: "inspect", Value: fmt.Sprintf("cubicle logs %s", blocker.TaskID)},
 			},
 		})
 	}
@@ -1102,22 +1128,8 @@ func buildStatusRecommendations(tasks []state.Task, blockers []state.Blocker, re
 			TaskID: review.TaskID,
 			Reason: "review-ready task needs operator decision",
 			Commands: []recommendedCommand{
-				{Label: "next", Value: fmt.Sprintf("cubicleq review accept %s", review.TaskID)},
-				{Label: "or", Value: fmt.Sprintf(`cubicleq review reject %s [--note "..."]`, review.TaskID)},
-			},
-		})
-	}
-	for _, task := range tasks {
-		if task.State != state.TaskStateFailed {
-			continue
-		}
-		recommendations = append(recommendations, statusRecommendation{
-			Kind:   "failed",
-			TaskID: task.ID,
-			Reason: "task failed and needs operator action",
-			Commands: []recommendedCommand{
-				{Label: "inspect", Value: fmt.Sprintf("cubicleq logs %s", task.ID)},
-				{Label: "next", Value: fmt.Sprintf("cubicleq retry %s", task.ID)},
+				{Label: "next", Value: fmt.Sprintf("cubicle review accept %s", review.TaskID)},
+				{Label: "or", Value: fmt.Sprintf(`cubicle review reject %s --note "..."`, review.TaskID)},
 			},
 		})
 	}
@@ -1126,7 +1138,7 @@ func buildStatusRecommendations(tasks []state.Task, blockers []state.Blocker, re
 			Reason: "runnable tasks exist with no active workers",
 			Commands: []recommendedCommand{{
 				Label: "next",
-				Value: "cubicleq run",
+				Value: "cubicle run",
 			}},
 		})
 	}

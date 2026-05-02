@@ -191,6 +191,26 @@ func PolicyPath(root string) string {
 	return filepath.Join(root, DirName, PolicyName)
 }
 
+func QwenDir(root string) string {
+	return filepath.Join(root, ".qwen")
+}
+
+func QwenSettingsPath(root string) string {
+	return filepath.Join(QwenDir(root), "settings.json")
+}
+
+func QwenEnvPath(root string) string {
+	return filepath.Join(QwenDir(root), ".env")
+}
+
+func OrchestratorRuntimeDir(root string) string {
+	return filepath.Join(RunsDir(root), "orchestrator")
+}
+
+func OrchestratorRuntimeQwenSettingsPath(root string) string {
+	return filepath.Join(OrchestratorRuntimeDir(root), ".qwen", "settings.json")
+}
+
 func AllowedActions(policy Policy) []string {
 	return append([]string{}, policy.Orchestrator.AllowedActions...)
 }

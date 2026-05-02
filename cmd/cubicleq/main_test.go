@@ -3,6 +3,7 @@ package main
 import (
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -565,6 +566,74 @@ func TestRunCleanupPrintsSuccessMessage(t *testing.T) {
 	}
 }
 
+func TestRunDoctorReportsProjectAndWorktreeQwenState(t *testing.T) {
+	root := t.TempDir()
+	runGitCommand(t, root, "init")
+
+	cfg, err := config.Default(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Backend.Command = "git"
+	if err := config.WriteDefault(root, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := state.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.InitSchema(); err != nil {
+		t.Fatal(err)
+	}
+
+	worktreePath := filepath.Join(root, "worktrees", "t-1")
+	if err := os.MkdirAll(config.QwenDir(worktreePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(config.QwenDir(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config.QwenSettingsPath(root), []byte("{\"model\":{\"name\":\"MiniMax-M2.7\"}}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config.QwenEnvPath(root), []byte("MINI_MAX_TOKEN_API_KEY=test-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config.QwenSettingsPath(worktreePath), []byte("{\"runtime\":true}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC()
+	if err := store.UpsertRuntime(state.Runtime{
+		TaskID:        "t-1",
+		BranchName:    "task/t-1",
+		WorktreePath:  worktreePath,
+		SessionID:     "t-1-session",
+		Status:        "launching",
+		PID:           0,
+		LastHeartbeat: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(t, func() {
+		if err := runDoctor(root); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(out, "project settings: found "+config.QwenSettingsPath(root)) {
+		t.Fatalf("expected doctor to report project qwen settings, got:\n%s", out)
+	}
+	if !strings.Contains(out, "project env:      found "+config.QwenEnvPath(root)) {
+		t.Fatalf("expected doctor to report project qwen env, got:\n%s", out)
+	}
+	if !strings.Contains(out, "worktree qwen settings: found "+config.QwenSettingsPath(worktreePath)) {
+		t.Fatalf("expected doctor to report worktree qwen settings, got:\n%s", out)
+	}
+}
+
 func testStore(t *testing.T) *state.Store {
 	t.Helper()
 	root := t.TempDir()
@@ -618,4 +687,13 @@ func captureStdout(t *testing.T, fn func()) string {
 		t.Fatal(err)
 	}
 	return string(out)
+}
+
+func runGitCommand(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+	}
 }

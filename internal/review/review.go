@@ -22,6 +22,7 @@ var ErrMergeConflict = errors.New("merge conflict")
 var ErrNoMergeChanges = errors.New("no committed task changes to merge")
 
 var runtimeOwnedPaths = []string{
+	".qwen/.env",
 	".qwen/settings.json",
 	".qwen/settings.json.orig",
 }
@@ -196,6 +197,10 @@ func cleanupSnapshotInputs(worktreePath string) error {
 	pycacheDirs := map[string]struct{}{}
 	for _, rel := range untracked {
 		switch {
+		case rel == ".qwen/.env":
+			if err := os.Remove(filepath.Join(worktreePath, rel)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
 		case rel == ".qwen/settings.json" || rel == ".qwen/settings.json.orig":
 			if err := os.Remove(filepath.Join(worktreePath, rel)); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err

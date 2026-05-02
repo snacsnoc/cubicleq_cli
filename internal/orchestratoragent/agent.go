@@ -122,6 +122,10 @@ func buildCommand(ctx context.Context, root, binPath string, cfg config.Config, 
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
+	runtimeSettingsPath, err := agents.PrepareProjectQwenRuntime(root, config.OrchestratorRuntimeDir(root), agents.RuntimeQwenOptions{})
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
 	args = append(agents.QwenHeadlessArgs(root, string(promptBytes), true), args...)
 	cmd := exec.CommandContext(ctx, cfg.Backend.Command, args...)
 	cmd.Dir = root
@@ -146,6 +150,7 @@ func buildCommand(ctx context.Context, root, binPath string, cfg config.Config, 
 	cmd.Stderr = io.MultiWriter(stderrFile, stderrBuf)
 	cmd.Env = append(os.Environ(),
 		"CUBICLE_BIN="+binPath,
+		"QWEN_CODE_SYSTEM_SETTINGS_PATH="+runtimeSettingsPath,
 	)
 	cleanup := func() {
 		_ = stdoutFile.Close()

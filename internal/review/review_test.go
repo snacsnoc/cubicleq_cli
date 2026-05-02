@@ -14,8 +14,6 @@ import (
 func TestAcceptRejectsNoOpBranch(t *testing.T) {
 	root := t.TempDir()
 	runGitTest(t, root, "init")
-	runGitTest(t, root, "config", "user.name", "Test User")
-	runGitTest(t, root, "config", "user.email", "test@example.com")
 	writeTestFile(t, filepath.Join(root, "README.md"), "# fixture\n")
 	runGitTest(t, root, "add", "README.md")
 	runGitTest(t, root, "commit", "-m", "initial")
@@ -44,6 +42,7 @@ func TestSnapshotWorktreeCleansRuntimeNoiseOnly(t *testing.T) {
 	runGitTest(t, root, "add", ".")
 	runGitTest(t, root, "commit", "-m", "base")
 
+	writeTestFile(t, filepath.Join(root, ".qwen", ".env"), "RUNTIME_KEY=secret\n")
 	writeTestFile(t, filepath.Join(root, ".qwen", "settings.json"), "{\"durable\":false}\n")
 	writeTestFile(t, filepath.Join(root, ".qwen", "settings.json.orig"), "runtime backup\n")
 	writeTestFile(t, filepath.Join(root, "__pycache__", "app.cpython-311.pyc"), "bytecode\n")
@@ -57,6 +56,7 @@ func TestSnapshotWorktreeCleansRuntimeNoiseOnly(t *testing.T) {
 	headFiles := strings.Fields(runGitOutput(t, root, "show", "--pretty=", "--name-only", "HEAD"))
 	assertContains(t, headFiles, "app.py")
 	assertContains(t, headFiles, "feature.py")
+	assertNotContains(t, headFiles, ".qwen/.env")
 	assertNotContains(t, headFiles, ".qwen/settings.json")
 	assertNotContains(t, headFiles, ".qwen/settings.json.orig")
 	assertNotContains(t, headFiles, "__pycache__/app.cpython-311.pyc")
@@ -67,6 +67,9 @@ func TestSnapshotWorktreeCleansRuntimeNoiseOnly(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, ".qwen", "settings.json.orig")); !os.IsNotExist(err) {
 		t.Fatalf("expected untracked qwen backup to be deleted, got err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".qwen", ".env")); !os.IsNotExist(err) {
+		t.Fatalf("expected untracked qwen env to be deleted, got err=%v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "__pycache__")); !os.IsNotExist(err) {
 		t.Fatalf("expected untracked __pycache__ to be deleted, got err=%v", err)
@@ -110,8 +113,16 @@ func TestAcceptMergeConflictIncludesPaths(t *testing.T) {
 
 func runGitTest(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
+	base := []string{
+		"-C", dir,
+		"-c", "safe.directory=*",
+		"-c", "user.name=Test User",
+		"-c", "user.email=test@example.com",
+	}
+	cmd := exec.Command("git", append(base, args...)...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
 	}
@@ -119,8 +130,16 @@ func runGitTest(t *testing.T, dir string, args ...string) {
 
 func runGitOutput(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
+	base := []string{
+		"-C", dir,
+		"-c", "safe.directory=*",
+		"-c", "user.name=Test User",
+		"-c", "user.email=test@example.com",
+	}
+	cmd := exec.Command("git", append(base, args...)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
@@ -150,8 +169,6 @@ func readTestFile(t *testing.T, path string) string {
 func initGitRepo(t *testing.T, root string) {
 	t.Helper()
 	runGitTest(t, root, "init")
-	runGitTest(t, root, "config", "user.name", "Test User")
-	runGitTest(t, root, "config", "user.email", "test@example.com")
 }
 
 func assertContains(t *testing.T, values []string, want string) {

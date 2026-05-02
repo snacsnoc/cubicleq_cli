@@ -22,7 +22,23 @@ func TestWriteQwenSettingsInheritsProjectSettings(t *testing.T) {
 			"experimentalLsp": false,
 		},
 		"model": map[string]any{
-			"name": "qwen3.6-plus",
+			"name": "MiniMax-M2.7",
+		},
+		"modelProviders": map[string]any{
+			"openai": []any{
+				map[string]any{
+					"id":          "MiniMax-M2.7",
+					"name":        "MiniMax-M2.7",
+					"envKey":      "MINI_MAX_TOKEN_API_KEY",
+					"baseUrl":     "https://api.minimax.io/v1",
+					"description": "MiniMax via OpenAI-compatible API",
+				},
+			},
+		},
+		"security": map[string]any{
+			"auth": map[string]any{
+				"selectedType": "openai",
+			},
 		},
 		"general": map[string]any{
 			"gitCoAuthor": false,
@@ -48,6 +64,9 @@ func TestWriteQwenSettingsInheritsProjectSettings(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(projectQwenDir, "settings.json"), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(projectQwenDir, ".env"), []byte("MINI_MAX_TOKEN_API_KEY=test-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := writeQwenSettings(projectRoot, worktree, "http://127.0.0.1:9999/mcp"); err != nil {
 		t.Fatal(err)
@@ -71,8 +90,28 @@ func TestWriteQwenSettingsInheritsProjectSettings(t *testing.T) {
 	}
 
 	model := ensureMap(got, "model")
-	if model["name"] != "qwen3.6-plus" {
+	if model["name"] != "MiniMax-M2.7" {
 		t.Fatalf("expected model to be preserved, got %#v", model["name"])
+	}
+	modelProviders := ensureMap(got, "modelProviders")
+	openaiProviders, ok := modelProviders["openai"].([]any)
+	if !ok || len(openaiProviders) != 1 {
+		t.Fatalf("expected openai provider list to be preserved, got %#v", modelProviders["openai"])
+	}
+	provider, ok := openaiProviders[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected provider entry to be a map, got %#v", openaiProviders[0])
+	}
+	if provider["baseUrl"] != "https://api.minimax.io/v1" {
+		t.Fatalf("expected baseUrl to be preserved, got %#v", provider["baseUrl"])
+	}
+	if provider["envKey"] != "MINI_MAX_TOKEN_API_KEY" {
+		t.Fatalf("expected envKey to be preserved, got %#v", provider["envKey"])
+	}
+	security := ensureMap(got, "security")
+	auth := ensureMap(security, "auth")
+	if auth["selectedType"] != "openai" {
+		t.Fatalf("expected selected auth type to be preserved, got %#v", auth["selectedType"])
 	}
 	tools := ensureMap(got, "tools")
 	if tools["approvalMode"] != "yolo" {
@@ -120,6 +159,14 @@ func TestWriteQwenSettingsInheritsProjectSettings(t *testing.T) {
 	if !found {
 		t.Fatalf("expected cubicleq to be added to mcp.allowed")
 	}
+
+	envRaw, err := os.ReadFile(filepath.Join(worktree, ".qwen", ".env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(envRaw); got != "MINI_MAX_TOKEN_API_KEY=test-token\n" {
+		t.Fatalf("expected project qwen env to be copied, got %q", got)
+	}
 }
 
 func TestWriteQwenSettingsDefaultsWhenMissing(t *testing.T) {
@@ -144,6 +191,25 @@ func TestWriteQwenSettingsDefaultsWhenMissing(t *testing.T) {
 	checkpointing := ensureMap(general, "checkpointing")
 	if checkpointing["enabled"] != true {
 		t.Fatalf("expected checkpointing enabled by default, got %#v", checkpointing["enabled"])
+	}
+}
+
+func TestPrepareProjectQwenRuntimeRemovesStaleEnvWhenProjectEnvMissing(t *testing.T) {
+	projectRoot := t.TempDir()
+	runtimeRoot := t.TempDir()
+	runtimeQwenDir := filepath.Join(runtimeRoot, ".qwen")
+	if err := os.MkdirAll(runtimeQwenDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runtimeQwenDir, ".env"), []byte("STALE=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := PrepareProjectQwenRuntime(projectRoot, runtimeRoot, RuntimeQwenOptions{CopyEnv: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(runtimeQwenDir, ".env")); !os.IsNotExist(err) {
+		t.Fatalf("expected stale runtime qwen env to be removed, err=%v", err)
 	}
 }
 
